@@ -1,0 +1,9 @@
+venv/
+output/
+test_output/
+.env
+debug_output/
+__pycache__/
+docs/_build/
+.DS_Store
+*.pyc
