@@ -22,3 +22,9 @@ processing for long videos, and exports to PDF and Notion.
    :caption: API Reference
 
    api/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Examples
+
+   example
