@@ -6,9 +6,16 @@ are automatically arranged in a two-column layout and alt-text captions are
 rendered below each image.
 """
 
+import re
 import markdown
 from xhtml2pdf import pisa
 import os
+
+# Pre-compiled regex patterns for PDF image processing
+_IMG_PAIR_RE = re.compile(r'(<p>\s*<img[^>]+>\s*</p>)\s*(<p>\s*<img[^>]+>\s*</p>)')
+_IMG_TAG_RE = re.compile(r'<img[^>]+>')
+_IMG_ALT_RE = re.compile(r'alt="([^"]+)"')
+_IMG_SRC_RE = re.compile(r'src="([^"]+)"')
 
 class PDFExporter:
     """Generates styled PDF documents from markdown notes.
@@ -75,18 +82,14 @@ class PDFExporter:
         Returns:
             Modified HTML with paired images wrapped in a ``<table>``.
         """
-        import re
-        
-        pattern = r'(<p>\s*<img[^>]+>\s*</p>)\s*(<p>\s*<img[^>]+>\s*</p>)'
-
         def replace_pair(match):
             img1_p = match.group(1)
             img2_p = match.group(2)
-            
+
             try:
-                img1 = re.search(r'<img[^>]+>', img1_p).group(0)
-                img2 = re.search(r'<img[^>]+>', img2_p).group(0)
-                
+                img1 = _IMG_TAG_RE.search(img1_p).group(0)
+                img2 = _IMG_TAG_RE.search(img2_p).group(0)
+
                 return f"""
                 <table style="width: 100%; border: none; margin-bottom: 20px;">
                   <tr>
@@ -99,7 +102,7 @@ class PDFExporter:
             except:
                 return match.group(0)
 
-        return re.sub(pattern, replace_pair, html_content)
+        return _IMG_PAIR_RE.sub(replace_pair, html_content)
 
     def _add_image_captions(self, html_content: str) -> str:
         """Add visible captions below images using their alt text.
@@ -111,25 +114,20 @@ class PDFExporter:
             HTML with ``<p class="caption">`` elements inserted after each
             ``<img>`` that has non-empty alt text.
         """
-        import re
-        
         def add_caption(match):
             img_tag = match.group(0)
-            alt_match = re.search(r'alt="([^"]+)"', img_tag)
-            
+            alt_match = _IMG_ALT_RE.search(img_tag)
+
             if alt_match and alt_match.group(1).strip():
                 caption = alt_match.group(1)
-                # Unescape HTML entities in caption
                 caption = caption.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-                
-                # Return img + caption paragraph with centered, smaller text
+
                 return f'''{img_tag}
 <p class="caption" style="text-align: center; font-size: 9pt; color: #666; margin-top: 5px; margin-bottom: 15px; font-style: italic;">{caption}</p>'''
-            
+
             return img_tag
-        
-        # Find all img tags and add captions
-        return re.sub(r'<img[^>]+>', add_caption, html_content)
+
+        return _IMG_TAG_RE.sub(add_caption, html_content)
 
 
     def _add_styling(self, html_content: str, base_path: str) -> str:
@@ -154,8 +152,7 @@ class PDFExporter:
             abs_path = os.path.join(base_path, src)
             return f'src="{abs_path}"'
 
-        import re
-        html_content = re.sub(r'src="([^"]+)"', replace_path, html_content)
+        html_content = _IMG_SRC_RE.sub(replace_path, html_content)
 
         css = """
         <style>

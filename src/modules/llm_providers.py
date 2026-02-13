@@ -241,25 +241,24 @@ class GoogleAIProvider(LLMProvider):
 
     def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
         super().__init__(model)
-        
+
         import google.generativeai as genai
-        
+        self._genai = genai
+
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(model)
-    
+
     def generate_json(self, prompt: str, max_tokens: int = 8192) -> Dict:
-        import google.generativeai as genai
-        
         response = self.model.generate_content(
             prompt,
-            generation_config=genai.GenerationConfig(
+            generation_config=self._genai.GenerationConfig(
                 response_mime_type="application/json",
                 max_output_tokens=max_tokens
             )
         )
-        
+
         text = self._clean_json_response(response.text)
-        
+
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -269,13 +268,11 @@ class GoogleAIProvider(LLMProvider):
             except json.JSONDecodeError:
                 print(f"Failed to parse JSON response")
                 return {}
-    
+
     def generate_text(self, prompt: str, max_tokens: int = 8192) -> str:
-        import google.generativeai as genai
-        
         response = self.model.generate_content(
             prompt,
-            generation_config=genai.GenerationConfig(max_output_tokens=max_tokens)
+            generation_config=self._genai.GenerationConfig(max_output_tokens=max_tokens)
         )
         return response.text
 

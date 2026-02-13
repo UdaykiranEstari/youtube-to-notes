@@ -65,7 +65,8 @@ class AudioExtractor:
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                check=True
+                check=True,
+                timeout=300
             )
             
             if os.path.exists(audio_path):

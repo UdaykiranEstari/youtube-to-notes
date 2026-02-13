@@ -6,9 +6,13 @@ from YouTube.
 """
 
 import os
+import re
 import json
 import yt_dlp
 from typing import Dict, Optional
+
+# Pre-compiled regex for stripping VTT inline tags
+_VTT_TAG_RE = re.compile(r'<[^>]+>')
 
 class YouTubeDownloader:
     """Downloads YouTube videos, subtitles, and thumbnails via yt-dlp.
@@ -23,7 +27,7 @@ class YouTubeDownloader:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-    def get_video_info(self, url: str, quality: str = "Medium", skip_subtitles: bool = False, skip_download: bool = False, start_time: Optional[int] = None, end_time: Optional[int] = None) -> Dict:
+    def get_video_info(self, url: str, quality: str = "Medium", skip_subtitles: bool = False, skip_download: bool = False, start_time: Optional[int] = None, end_time: Optional[int] = None, skip_thumbnail: bool = False) -> Dict:
         """Download a video (or just its metadata) and return file paths.
 
         Args:
@@ -36,6 +40,8 @@ class YouTubeDownloader:
                 file.
             start_time: Optional start offset in seconds for partial download.
             end_time: Optional end offset in seconds for partial download.
+            skip_thumbnail: Skip thumbnail download (useful for chunk
+                processing where the main download already fetched it).
 
         Returns:
             Dict with keys ``id``, ``title``, ``video_path``,
@@ -57,7 +63,7 @@ class YouTubeDownloader:
             'writesubtitles': not skip_subtitles,     # Download manual subs if available
             'subtitlesformat': 'vtt',   # VTT is easier to parse
             'skip_download': skip_download,     # Allow skipping download
-            'writethumbnail': True,     # Download video thumbnail
+            'writethumbnail': not skip_thumbnail,  # Skip thumbnail for chunk processing
             'postprocessors': [],       # No conversion, keep original format (webm/mkv) for speed
             'quiet': False,
             'no_warnings': True,
@@ -88,34 +94,25 @@ class YouTubeDownloader:
             video_ext = info.get('ext', 'mp4')
             video_path = os.path.join(self.output_dir, f"{video_id}.{video_ext}")
             
-            # Find thumbnail file (support jpg and webp)
-            thumbnail_path = None
-            for file in os.listdir(self.output_dir):
-                if file.startswith(video_id) and (file.endswith('.jpg') or file.endswith('.webp')):
-                    thumbnail_path = os.path.join(self.output_dir, file)
-                    # Prefer jpg if both exist (though we just removed converter, so likely webp)
-                    if file.endswith('.jpg'):
-                        break
-            
-            # Find subtitle file
-            
-            # Find subtitle file
-            # yt-dlp names it like video_id.en.vtt
+            # Single directory scan for subtitle and thumbnail
             subtitle_path = None
+            thumbnail_path = None
+            yt_dlp_thumb = None
+
             for file in os.listdir(self.output_dir):
-                if file.startswith(video_id) and file.endswith('.vtt'):
+                if not file.startswith(video_id):
+                    continue
+                if file.endswith('.vtt') and subtitle_path is None:
                     subtitle_path = os.path.join(self.output_dir, file)
-                    break
-            
-            # Try direct high-res thumbnail download
-            thumbnail_path = self._download_high_res_thumbnail(video_id)
-            
-            # Fallback to yt-dlp downloaded thumbnail if direct download failed
-            if not thumbnail_path:
-                for file in os.listdir(self.output_dir):
-                    if file.startswith(video_id) and (file.endswith('.jpg') or file.endswith('.webp')):
-                        thumbnail_path = os.path.join(self.output_dir, file)
-                        break
+                elif file.endswith(('.jpg', '.webp')):
+                    if yt_dlp_thumb is None or file.endswith('.jpg'):
+                        yt_dlp_thumb = os.path.join(self.output_dir, file)
+
+            # Try high-res thumbnail first, fall back to yt-dlp downloaded one
+            if not skip_thumbnail:
+                thumbnail_path = self._download_high_res_thumbnail(video_id) or yt_dlp_thumb
+            else:
+                thumbnail_path = yt_dlp_thumb
             
             return {
                 "id": video_id,
@@ -202,10 +199,8 @@ class YouTubeDownloader:
                     pass
                 continue
                 
-            # Content line
-            # Remove tags like <c> or <00:00:00>
-            import re
-            clean_line = re.sub(r'<[^>]+>', '', line)
+            # Content line — remove tags like <c> or <00:00:00>
+            clean_line = _VTT_TAG_RE.sub('', line)
             
             # Avoid duplicates (VTT often repeats lines for karaoke effect)
             if clean_line and clean_line not in seen_lines:

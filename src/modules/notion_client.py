@@ -6,6 +6,7 @@ Notion API does not support direct file uploads to page content.
 """
 
 import os
+import concurrent.futures
 import requests
 from notion_client import Client
 from typing import List, Dict, Any, Optional
@@ -192,6 +193,34 @@ class NotionClient:
         except Exception as e:
             print(f"Error uploading to Imgur: {e}")
             return None
+
+    def upload_images_batch(self, image_paths: List[str], max_workers: int = 5) -> Dict[str, Optional[str]]:
+        """Upload multiple images to Imgur in parallel.
+
+        Args:
+            image_paths: List of local image file paths.
+            max_workers: Maximum concurrent uploads.
+
+        Returns:
+            Dict mapping each image path to its Imgur URL (or None on failure).
+        """
+        results = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {
+                executor.submit(self.upload_image_to_imgur, path): path
+                for path in image_paths
+            }
+            for future in concurrent.futures.as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    results[path] = future.result()
+                except Exception as e:
+                    print(f"Imgur upload error for {path}: {e}")
+                    results[path] = None
+
+        return results
+
 
 if __name__ == "__main__":
     pass

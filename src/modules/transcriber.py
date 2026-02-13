@@ -56,11 +56,13 @@ class Transcriber:
         
         self.model = _MODEL_INSTANCE
     
-    def transcribe_audio(self, audio_path: str) -> Optional[Dict]:
+    def transcribe_audio(self, audio_path: str, beam_size: int = 5) -> Optional[Dict]:
         """Transcribe an audio file and return word-level timestamps.
 
         Args:
             audio_path: Path to the audio file (WAV recommended).
+            beam_size: Beam size for decoding. Use 1 for faster
+                transcription (e.g. quick summary mode), 5 for best quality.
 
         Returns:
             Dict with ``text``, ``segments`` (list of segment dicts with
@@ -72,11 +74,11 @@ class Transcriber:
         """
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
-        
+
         try:
             segments, info = self.model.transcribe(
                 audio_path,
-                beam_size=5,
+                beam_size=beam_size,
                 word_timestamps=True
             )
             

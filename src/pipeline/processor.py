@@ -174,10 +174,29 @@ def process_single_video_file(
             for ts in ts_list:
                 if ts: timestamps.append(ts)
     
-    screenshot_paths = extractor.extract_frames(
+    raw_screenshot_paths = extractor.extract_frames(
         video_path, timestamps, smart_extraction=smart_extraction
     )
-    
+
+    # Handle dedup: remove screenshot entries from analysis where frames were skipped (None)
+    # Build a set of skipped indices so we can strip them from the analysis sections
+    skipped_indices = {i for i, p in enumerate(raw_screenshot_paths) if p is None}
+    if skipped_indices:
+        screenshot_idx = 0
+        for section in analysis.get("sections", []):
+            if isinstance(section.get("content"), list):
+                filtered_content = []
+                for item in section["content"]:
+                    if item.get("type") == "screenshot":
+                        if screenshot_idx not in skipped_indices:
+                            filtered_content.append(item)
+                        screenshot_idx += 1
+                    else:
+                        filtered_content.append(item)
+                section["content"] = filtered_content
+
+    screenshot_paths = [p for p in raw_screenshot_paths if p is not None]
+
     if progress_callback:
         progress_callback("Generating markdown...", 0.75)
     
@@ -409,7 +428,8 @@ def process_local_chunk_task(
     smart_extraction: bool,
     screenshot_density: str,
     detail_level: str,
-    llm_provider: LLMProvider = None
+    llm_provider: LLMProvider = None,
+    video_url: str = ""
 ):
     """Worker function that extracts and processes a chunk from a local video.
 
@@ -429,6 +449,7 @@ def process_local_chunk_task(
         screenshot_density: Screenshot density setting.
         detail_level: Note detail level setting.
         llm_provider: LLM backend instance.
+        video_url: Original YouTube URL (used for clickable timestamps).
 
     Returns:
         Tuple of ``(chunk_index, md_path, analysis, chunk_dir, error)``.
@@ -458,7 +479,7 @@ def process_local_chunk_task(
             detail_level=detail_level,
             progress_callback=None,
             raw_response_filename=f"gemini_raw_response_{chunk_name}.txt",
-            video_url="",
+            video_url=video_url,
             llm_provider=llm_provider
         )
 
@@ -654,19 +675,26 @@ def process_local_video(
         # Export to Notion
         if upload_to_notion and not quick_summary_mode:
             full_analysis = {"title": video_title, "summary": "", "sections": []}
-            all_screenshot_paths = []
 
+            # Single directory scan — group images by chunk prefix
+            all_files = os.listdir(video_output_dir)
+            images_by_chunk = {}
+            for f in all_files:
+                if f.endswith(('.jpg', '.png', '.webp')) and f.startswith('chunk_'):
+                    prefix = f[:9]  # "chunk_NNN"
+                    images_by_chunk.setdefault(prefix, []).append(f)
+
+            all_screenshot_paths = []
             for i, analysis in enumerate(chunk_analyses):
                 if analysis:
                     if i == 0:
                         full_analysis["summary"] = analysis.get("summary", "")
                     full_analysis["sections"].extend(analysis.get("sections", []))
 
-                    chunk_prefix = f"chunk_{i+1:03d}_"
+                    chunk_prefix = f"chunk_{i+1:03d}"
                     chunk_imgs = sorted([
                         os.path.join(video_output_dir, f)
-                        for f in os.listdir(video_output_dir)
-                        if f.startswith(chunk_prefix) and f.endswith(('.jpg', '.png', '.webp'))
+                        for f in images_by_chunk.get(chunk_prefix, [])
                     ])
                     all_screenshot_paths.extend(chunk_imgs)
 
@@ -707,16 +735,24 @@ def _export_to_notion(analysis, screenshot_paths, output_dir, progress_callback=
             return
 
         if progress_callback:
-            progress_callback("Uploading to Notion...", 0.95)
+            progress_callback("Uploading images to Imgur...", 0.93)
         print("Starting Notion upload...")
 
+        # Pre-upload all images in parallel
+        imgur_urls = {}
+        if screenshot_paths:
+            imgur_urls = notion.upload_images_batch(screenshot_paths)
+
+        if progress_callback:
+            progress_callback("Building Notion page...", 0.95)
+
         blocks = []
-        
+
         # Add Summary
         if "summary" in analysis:
             blocks.append(notion.create_text_block("Summary", "heading_2"))
             blocks.append(notion.create_text_block(analysis["summary"]))
-            
+
         if video_url:
             blocks.append(notion.create_text_block(f"Source: {video_url}", "callout"))
 
@@ -725,7 +761,7 @@ def _export_to_notion(analysis, screenshot_paths, output_dir, progress_callback=
 
         for section in analysis.get("sections", []):
             blocks.append(notion.create_text_block(section["heading"], "heading_2"))
-            
+
             if isinstance(section.get("content"), list):
                 for item in section["content"]:
                     if item.get("type") == "text":
@@ -733,24 +769,22 @@ def _export_to_notion(analysis, screenshot_paths, output_dir, progress_callback=
                     elif item.get("type") == "screenshot":
                         ts = item.get("timestamp")
                         caption = item.get("caption", f"Screenshot at {ts}")
-                        
+
                         if screenshot_index < len(screenshot_paths):
                             image_path = screenshot_paths[screenshot_index]
                             image_name = os.path.basename(image_path)
-                            
+
                             if image_name not in used_screenshots:
-                                # Try uploading to Imgur
-                                imgur_url = notion.upload_image_to_imgur(image_path)
-                                
+                                imgur_url = imgur_urls.get(image_path)
+
                                 if imgur_url:
                                     img_block = notion.create_image_block(imgur_url)
                                     if img_block:
                                         blocks.append(img_block)
-                                        blocks.append(notion.create_text_block(caption, "quote")) # Caption as quote
+                                        blocks.append(notion.create_text_block(caption, "quote"))
                                 else:
-                                    # Fallback to placeholder
                                     blocks.append(notion.create_text_block(f"📷 [Image: {caption}] (Upload failed)", "callout"))
-                                
+
                                 used_screenshots.add(image_name)
                             screenshot_index += 1
             else:
@@ -829,24 +863,39 @@ def process_video(
         if progress_callback:
             progress_callback("Fetching video info...", 0.05)
         
-        # 1. Get Video Metadata (No Download)
-        temp_downloader = YouTubeDownloader("output")
-        video_info = temp_downloader.get_video_info(url, quality="Low", skip_download=True)
-        
+        # 1. Download the full video once (instead of per-chunk)
+        downloader = YouTubeDownloader("output")
+        video_info = downloader.get_video_info(url, quality=video_quality, skip_download=False)
+
         safe_title = sanitize_filename(video_info["title"])
         video_output_dir = os.path.join("output", safe_title)
         if not os.path.exists(video_output_dir):
             os.makedirs(video_output_dir)
-            
+
+        # Move downloaded video to output dir
+        downloaded_video_path = video_info.get("video_path")
+        if downloaded_video_path and os.path.exists(downloaded_video_path):
+            if os.path.dirname(os.path.abspath(downloaded_video_path)) != os.path.abspath(video_output_dir):
+                dst_video = os.path.join(video_output_dir, os.path.basename(downloaded_video_path))
+                shutil.move(downloaded_video_path, dst_video)
+                downloaded_video_path = dst_video
+
         # Move thumbnail to video folder if it exists in root
         if video_info.get("thumbnail_path") and os.path.exists(video_info["thumbnail_path"]):
             src_thumb = video_info["thumbnail_path"]
-            # Check if it's already in the right place (just in case)
-            if os.path.dirname(src_thumb) != video_output_dir:
+            if os.path.dirname(os.path.abspath(src_thumb)) != os.path.abspath(video_output_dir):
                 dst_thumb = os.path.join(video_output_dir, os.path.basename(src_thumb))
                 shutil.move(src_thumb, dst_thumb)
                 video_info["thumbnail_path"] = dst_thumb
-            
+
+        # Move subtitle file to video folder if it exists
+        if video_info.get("subtitle_path") and os.path.exists(video_info["subtitle_path"]):
+            src_sub = video_info["subtitle_path"]
+            if os.path.dirname(os.path.abspath(src_sub)) != os.path.abspath(video_output_dir):
+                dst_sub = os.path.join(video_output_dir, os.path.basename(src_sub))
+                shutil.move(src_sub, dst_sub)
+                video_info["subtitle_path"] = dst_sub
+
         # Determine Duration and Range
         full_duration = video_info.get('duration', 0)
         
@@ -880,30 +929,29 @@ def process_video(
         
         if progress_callback:
             progress_callback(f"Processing {num_chunks} chunks in parallel ({target_duration/60:.1f} min total)...", 0.10)
-            
-        # 2. Parallel Execution
+
+        # 2. Parallel Execution — split locally, process each chunk
         chunk_markdown_paths = [None] * num_chunks
         chunk_analyses = [None] * num_chunks
-        
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = []
             for i, (cs, ce) in enumerate(chunks):
                 futures.append(executor.submit(
-                    process_chunk_task,
+                    process_local_chunk_task,
                     i,
                     num_chunks,
-                    url,
+                    downloaded_video_path,
                     video_info['title'],
                     video_output_dir,
                     cs,
                     ce,
-                    use_audio_transcription,
                     quick_summary_mode,
                     smart_extraction,
                     screenshot_density,
                     detail_level,
-                    video_quality,
-                    llm_provider
+                    llm_provider,
+                    video_url=url
                 ))
             
             completed_count = 0
@@ -999,25 +1047,25 @@ def process_video(
             
             # Aggregate analysis sections
             full_analysis = {"title": video_info['title'], "summary": "", "sections": []}
+
+            # Single directory scan — group images by chunk prefix
+            all_files = os.listdir(video_output_dir)
+            images_by_chunk = {}
+            for f in all_files:
+                if f.endswith(('.jpg', '.png', '.webp')) and f.startswith('chunk_'):
+                    prefix = f[:9]  # "chunk_NNN"
+                    images_by_chunk.setdefault(prefix, []).append(f)
+
             all_screenshot_paths = []
-            
-            # Collect valid analyses
             for i, analysis in enumerate(chunk_analyses):
                 if analysis:
                     if i == 0: full_analysis["summary"] = analysis.get("summary", "")
                     full_analysis["sections"].extend(analysis.get("sections", []))
-                    
-                    # We need to find the moved screenshot paths for this chunk
-                    # They are in video_output_dir with prefix chunk_{i+1:03d}_
-                    # This is tricky because we don't have the exact list here easily without re-scanning
-                    # But we know the flow.
-                    
-                    # Re-scan output dir for images matching this chunk
-                    chunk_prefix = f"chunk_{i+1:03d}_"
+
+                    chunk_prefix = f"chunk_{i+1:03d}"
                     chunk_imgs = sorted([
-                        os.path.join(video_output_dir, f) 
-                        for f in os.listdir(video_output_dir) 
-                        if f.startswith(chunk_prefix) and f.endswith(('.jpg', '.png', '.webp'))
+                        os.path.join(video_output_dir, f)
+                        for f in images_by_chunk.get(chunk_prefix, [])
                     ])
                     all_screenshot_paths.extend(chunk_imgs)
             
