@@ -1,9 +1,9 @@
 """Markdown-to-PDF conversion with image embedding.
 
-Converts a markdown notes file into a styled A3 PDF using
-`xhtml2pdf <https://github.com/xhtml2pdf/xhtml2pdf>`_.  Consecutive images
-are automatically arranged in a two-column layout and alt-text captions are
-rendered below each image.
+Converts a markdown notes file into a styled full-width PDF using
+`xhtml2pdf <https://github.com/xhtml2pdf/xhtml2pdf>`_.  Images are rendered
+full-width with captions below, following an editorial magazine layout
+inspired by NeverTooSmall.
 """
 
 import re
@@ -12,7 +12,6 @@ from xhtml2pdf import pisa
 import os
 
 # Pre-compiled regex patterns for PDF image processing
-_IMG_PAIR_RE = re.compile(r'(<p>\s*<img[^>]+>\s*</p>)\s*(<p>\s*<img[^>]+>\s*</p>)')
 _IMG_TAG_RE = re.compile(r'<img[^>]+>')
 _IMG_ALT_RE = re.compile(r'alt="([^"]+)"')
 _IMG_SRC_RE = re.compile(r'src="([^"]+)"')
@@ -20,9 +19,8 @@ _IMG_SRC_RE = re.compile(r'src="([^"]+)"')
 class PDFExporter:
     """Generates styled PDF documents from markdown notes.
 
-    Images referenced in the markdown are resolved to absolute paths and
-    embedded.  Consecutive images are arranged in a two-column table layout
-    and alt-text captions are rendered beneath each image.
+    Images are rendered full-width with captions beneath, using Inter as the
+    sole typeface to match an editorial magazine aesthetic.
     """
 
     def __init__(self):
@@ -51,10 +49,7 @@ class PDFExporter:
         # Convert Markdown to HTML
         html_content = markdown.markdown(md_content, extensions=['tables', 'fenced_code'])
 
-        # Process images to create 2-column layout
-        html_content = self._process_html_images(html_content)
-
-        # Add visible captions below images
+        # Add visible captions below full-width images
         html_content = self._add_image_captions(html_content)
 
         # Add basic styling
@@ -73,39 +68,8 @@ class PDFExporter:
 
         return output_pdf_path
 
-    def _process_html_images(self, html_content: str) -> str:
-        """Group consecutive image paragraphs into a two-column table layout.
-
-        Args:
-            html_content: HTML string to process.
-
-        Returns:
-            Modified HTML with paired images wrapped in a ``<table>``.
-        """
-        def replace_pair(match):
-            img1_p = match.group(1)
-            img2_p = match.group(2)
-
-            try:
-                img1 = _IMG_TAG_RE.search(img1_p).group(0)
-                img2 = _IMG_TAG_RE.search(img2_p).group(0)
-
-                return f"""
-                <table style="width: 100%; border: none; margin-bottom: 20px;">
-                  <tr>
-                    <td style="width: 47%; padding-right: 0; vertical-align: top; border: none;">{img1}</td>
-                    <td style="width: 6%; border: none;"></td> <!-- Spacer -->
-                    <td style="width: 47%; padding-left: 0; vertical-align: top; border: none;">{img2}</td>
-                  </tr>
-                </table>
-                """
-            except:
-                return match.group(0)
-
-        return _IMG_PAIR_RE.sub(replace_pair, html_content)
-
     def _add_image_captions(self, html_content: str) -> str:
-        """Add visible captions below images using their alt text.
+        """Add visible captions below full-width images using their alt text.
 
         Args:
             html_content: HTML string to process.
@@ -123,15 +87,19 @@ class PDFExporter:
                 caption = caption.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
 
                 return f'''{img_tag}
-<p class="caption" style="text-align: center; font-size: 9pt; color: #666; margin-top: 5px; margin-bottom: 15px; font-style: italic;">{caption}</p>'''
+<p class="caption">{caption}</p>'''
 
             return img_tag
 
         return _IMG_TAG_RE.sub(add_caption, html_content)
 
-
     def _add_styling(self, html_content: str, base_path: str) -> str:
         """Wrap HTML content in a full document with CSS and absolute image paths.
+
+        Uses a full-width page layout with Inter as the sole typeface,
+        matching the NeverTooSmall editorial aesthetic: consistent font
+        across all headings and body, generous whitespace, and full-width
+        images.
 
         Args:
             html_content: Inner HTML body content.
@@ -148,7 +116,7 @@ class PDFExporter:
             src = match.group(1)
             if src.startswith(('http://', 'https://', 'file://', '/')):
                 return f'src="{src}"'
-            
+
             abs_path = os.path.join(base_path, src)
             return f'src="{abs_path}"'
 
@@ -157,92 +125,127 @@ class PDFExporter:
         css = """
         <style>
             @page {
-                size: A3;
-                margin: 2cm;
+                size: 11in 17in;
+                margin: 1.5cm 2cm;
             }
             body {
-                font-family: Helvetica, sans-serif;
-                font-size: 12pt;
-                line-height: 1.5;
+                font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 11pt;
+                line-height: 1.4;
                 color: #2B2B2B;
+                -webkit-font-smoothing: antialiased;
             }
+
+            /* --- Headings: same font family, differentiated by size/weight --- */
             h1 {
-                font-family: "Times New Roman", serif;
-                font-size: 26pt;
-                font-weight: bold;
-                color: #000000;
-                border-bottom: 1px solid #ddd;
-                padding-bottom: 15px;
+                font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 24pt;
+                font-weight: 600;
+                color: #1a1a1a;
                 margin-top: 0;
-                margin-bottom: 20px;
+                margin-bottom: 24px;
+                padding-bottom: 16px;
+                border-bottom: 1px solid #e0e0e0;
+                letter-spacing: -0.02em;
             }
             h2 {
-                font-family: "Times New Roman", serif;
-                font-size: 20pt;
-                font-weight: bold;
-                color: #000000;
-                margin-top: 30px;
-                margin-bottom: 15px;
+                font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 18pt;
+                font-weight: 500;
+                color: #1a1a1a;
+                margin-top: 48px;
+                margin-bottom: 16px;
+                letter-spacing: -0.01em;
             }
             h3 {
-                font-family: "Times New Roman", serif;
-                font-size: 16pt;
-                font-weight: bold;
-                color: #444;
-                margin-top: 20px;
-                margin-bottom: 10px;
-            }
-            p {
+                font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 14pt;
+                font-weight: 500;
+                color: #333;
+                margin-top: 32px;
                 margin-bottom: 12px;
-                text-align: justify;
             }
+
+            /* --- Body text --- */
+            p {
+                margin-bottom: 1.4em;
+                text-align: left;
+            }
+
+            /* --- Full-width images with generous spacing --- */
             img {
-                max-width: 100%;
+                width: 100%;
                 height: auto;
-                margin: 0;
-                border-radius: 2px;
+                margin: 48px 0 8px 0;
+                border-radius: 0;
             }
-            /* Table styling for image grid */
+
+            /* --- Captions: smaller, muted --- */
+            p.caption {
+                font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 9pt;
+                line-height: 1.4;
+                color: #888;
+                text-align: left;
+                margin-top: 4px;
+                margin-bottom: 48px;
+                font-weight: 400;
+            }
+
+            /* --- Tables --- */
             table {
                 width: 100%;
                 border-collapse: collapse;
-                margin-bottom: 20px;
+                margin: 24px 0;
             }
-            td {
+            td, th {
                 vertical-align: top;
-                padding: 0;
+                padding: 6px 8px;
+                border-bottom: 1px solid #eee;
+                font-size: 10pt;
             }
-            
+
+            /* --- Code --- */
             code {
                 background-color: #f5f5f5;
-                padding: 2px 4px;
+                padding: 2px 5px;
                 border-radius: 3px;
-                font-family: Courier, monospace;
-                font-size: 10pt;
+                font-family: "SF Mono", Menlo, Courier, monospace;
+                font-size: 9pt;
             }
             pre {
                 background-color: #f5f5f5;
-                padding: 15px;
-                border-radius: 5px;
+                padding: 16px;
+                border-radius: 4px;
                 overflow-x: auto;
-                font-family: Courier, monospace;
+                font-family: "SF Mono", Menlo, Courier, monospace;
                 font-size: 9pt;
-                margin: 20px 0;
+                margin: 24px 0;
+                line-height: 1.5;
             }
+
+            /* --- Blockquotes --- */
             blockquote {
-                border-left: 3px solid #ccc;
-                padding-left: 15px;
-                color: #666;
-                font-style: italic;
-                margin: 20px 0;
+                border-left: 2px solid #ccc;
+                padding-left: 16px;
+                color: #555;
+                font-style: normal;
+                margin: 24px 0;
             }
+
             strong {
-                color: #000;
-                font-weight: bold;
+                color: #1a1a1a;
+                font-weight: 600;
+            }
+
+            /* --- Source link --- */
+            a {
+                color: #2B2B2B;
+                text-decoration: underline;
             }
         </style>
         """
-        
+
         full_html = f"""
         <!DOCTYPE html>
         <html>
@@ -255,5 +258,5 @@ class PDFExporter:
         </body>
         </html>
         """
-        
+
         return full_html
