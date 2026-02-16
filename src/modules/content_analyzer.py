@@ -172,11 +172,11 @@ class ContentAnalyzer:
             Instruction string to embed in the LLM prompt.
         """
         if density == "Low":
-            return "Aim for **3-5 screenshots** per major section."
+            return "Aim for **4-6 screenshots** per major section. Use an **even number** of screenshots per section (2, 4, 6, …) so they pair into a 2-column grid."
         elif density == "High":
-            return "Aim for **15-20 screenshots** per major section. Capture every visual step."
+            return "Aim for **14-20 screenshots** per major section. Capture every visual step. Use an **even number** of screenshots per section (2, 4, 6, …) so they pair into a 2-column grid."
         else: # Medium
-            return "Aim for **8-12 screenshots** per major section."
+            return "Aim for **8-12 screenshots** per major section. Use an **even number** of screenshots per section (2, 4, 6, …) so they pair into a 2-column grid."
 
     def _get_detail_instruction(self, level: str) -> str:
         """Return a prompt fragment describing the target detail level.
@@ -254,7 +254,7 @@ class ContentAnalyzer:
         # Inject timestamps into the transcript for the LLM to reference
         # This is much better than a separate list which gets truncated
         # Decreased interval to 30s to improve timestamp accuracy
-        timestamped_transcript = self._inject_timestamps(word_timestamps, interval=30)
+        timestamped_transcript = self._inject_timestamps(word_timestamps, interval=15)
         
         density_instr = self._get_density_instruction(density)
         detail_instr = self._get_detail_instruction(detail_level)
@@ -273,6 +273,7 @@ class ContentAnalyzer:
         - **DIVERSE TIMESTAMPS**: Request screenshots at timestamps that are AT LEAST 10 seconds apart. Do NOT request multiple screenshots at very similar timestamps.
         - **VISUAL RELEVANCE**: Only request screenshots when there is a likely **visual change** or **diagram** being discussed. Avoid screenshots of just the speaker talking unless they are showing something.
         - **PRECISE TIMING**: Use the nearest **[Time: Xs]** marker and interpolate carefully. If a topic starts 10 seconds after [Time: 60s], the screenshot should be around 62s.
+        - **EVEN COUNT**: Each section MUST have an **even number** of screenshots (2, 4, 6, …) so they pair into a 2-column grid.
         - {density_instr}
         
         Return the output strictly as a JSON object with the following structure:
@@ -376,6 +377,7 @@ class ContentAnalyzer:
         - **INTERLEAVE TEXT AND IMAGES**: Do NOT list multiple screenshots in a row. Always provide context text before or after every screenshot.
         - **DESCRIPTIVE CAPTIONS**: Every screenshot MUST have a descriptive caption explaining what is shown.
         - **ESTIMATE TIMESTAMPS**: Since you don't have precise word timestamps, estimate the approximate time (in seconds) based on the flow of the transcript (assuming average speaking rate).
+        - **EVEN COUNT**: Each section MUST have an **even number** of screenshots (2, 4, 6, …) so they pair into a 2-column grid.
         - {density_instr}
         
         Return the output strictly as a JSON object with the following structure:

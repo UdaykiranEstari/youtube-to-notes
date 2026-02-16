@@ -154,7 +154,16 @@ def process_single_video_file(
     
     if not analysis:
         raise Exception("Failed to analyze content")
-    
+
+    # Post-processing: ensure even screenshot count per section for 2-column grid
+    for section in analysis.get("sections", []):
+        if isinstance(section.get("content"), list):
+            screenshot_items = [item for item in section["content"] if item.get("type") == "screenshot"]
+            if len(screenshot_items) % 2 != 0 and len(screenshot_items) > 0:
+                # Drop the last screenshot entry to make count even
+                last_screenshot = screenshot_items[-1]
+                section["content"].remove(last_screenshot)
+
     if progress_callback:
         progress_callback("Extracting screenshots...", 0.55)
     
@@ -228,9 +237,7 @@ def process_single_video_file(
 
         for section in sections:
             heading = section['heading']
-            slug = heading.lower().replace(' ', '-').replace('/', '-')
-            slug = re.sub(r'[^\w\-]', '', slug)
-            f.write(f"<a name=\"{slug}\"></a>\n\n## {heading}\n")
+            f.write(f"## {heading}\n")
             
             if isinstance(section.get("content"), list):
                 for item in section["content"]:

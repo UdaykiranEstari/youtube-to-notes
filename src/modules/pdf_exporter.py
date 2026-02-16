@@ -47,7 +47,14 @@ class PDFExporter:
             md_content = f.read()
 
         # Convert Markdown to HTML
-        html_content = markdown.markdown(md_content, extensions=['tables', 'fenced_code'])
+        html_content = markdown.markdown(md_content, extensions=['tables', 'fenced_code', 'toc'])
+
+        # Prepend hero thumbnail if found in the same directory
+        base_dir = os.path.dirname(markdown_path)
+        hero_thumbnail = self._find_hero_thumbnail(base_dir)
+        if hero_thumbnail:
+            abs_thumb = os.path.abspath(hero_thumbnail)
+            html_content = f'<img src="{abs_thumb}" alt="Video thumbnail" style="margin-top:0; margin-bottom:32px;">\n' + html_content
 
         # Add visible captions below full-width images
         html_content = self._add_image_captions(html_content)
@@ -67,6 +74,35 @@ class PDFExporter:
             raise Exception(f"PDF generation failed: {pisa_status.err}")
 
         return output_pdf_path
+
+    def _find_hero_thumbnail(self, base_dir: str):
+        """Find the hero thumbnail image in the output directory.
+
+        Looks for high-res thumbnails (``_maxres`` in name) first, then
+        falls back to any non-screenshot image.
+
+        Args:
+            base_dir: Directory to search.
+
+        Returns:
+            Path string to the thumbnail, or *None* if not found.
+        """
+        image_files = [
+            f for f in os.listdir(base_dir)
+            if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
+        ]
+
+        # Priority 1: _maxres thumbnail (exclude chunk-prefixed copies)
+        for f in image_files:
+            if '_maxres' in f and not f.startswith('chunk_'):
+                return os.path.join(base_dir, f)
+
+        # Priority 2: any non-screenshot, non-chunk image
+        for f in image_files:
+            if '_screenshot_' not in f and not f.startswith('chunk_'):
+                return os.path.join(base_dir, f)
+
+        return None
 
     def _add_image_captions(self, html_content: str) -> str:
         """Add visible captions below full-width images using their alt text.

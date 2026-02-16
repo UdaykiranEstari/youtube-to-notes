@@ -13,12 +13,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.pipeline.processor import process_video, process_local_video
 from src.modules.exporter import Exporter
+from src.modules.pdf_exporter import PDFExporter
 from src.modules.llm_providers import get_provider_choices, get_provider_key, get_models_for_provider, get_default_model, PROVIDER_CONFIG
 from src.utils.common import sanitize_filename, make_timestamp_clickable, parse_time_string
 
 
 import concurrent.futures
 import re
+import base64
+import markdown
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -125,7 +128,7 @@ def main():
         h1, .main [data-testid="stMarkdownContainer"] h1 {
             font-weight: 600;
             letter-spacing: -0.02em;
-            font-size: 2.2rem !important;
+            font-size: 3.2rem !important;
             margin-top: 1.5em !important;
         }
         
@@ -301,9 +304,11 @@ def main():
                 help="Auto-upload notes to Notion after generation"
             )
 
-    # Sidebar - History Only
+    # Placeholder for video preview at top of sidebar (filled after URL input is rendered)
+    _sidebar_preview_placeholder = st.sidebar.empty()
+
+    # Sidebar - History
     st.sidebar.title("History")
-    st.sidebar.info("Select past videos to view notes.")
 
 
     # st.sidebar.divider()
@@ -320,12 +325,14 @@ def main():
             )
             if st.sidebar.button("Load Notes"):
                 st.session_state.current_folder = selected_folder
-            
-
 
         else:
             st.sidebar.info("No notes yet. Process a video to get started!")
     
+    st.sidebar.divider()
+
+    website_view = st.sidebar.checkbox("Website View", value=False)
+
     st.sidebar.divider()
 
     # --- Local Video Upload ---
@@ -354,35 +361,27 @@ def main():
         )
     with col2:
         process_btn = st.button("Create Notes", type="primary")
-    
-    # Video Preview - Show thumbnail when URL is entered
+
+    # --- Fill sidebar preview placeholder at top ---
     if url and ('youtube.com' in url or 'youtu.be' in url):
-        with st.spinner("Loading preview..."):
-            preview = fetch_video_preview(url)
-        
-        if preview:
-            # Create a nice preview card
-            preview_col1, preview_col2 = st.columns([1, 2])
-            
-            with preview_col1:
-                st.image(preview['thumbnail_url'], use_container_width=True)
-            
-            with preview_col2:
-                st.markdown(f"### {preview['title']}")
-                st.caption(f"🎬 {preview['channel']} • ⏱️ {preview['duration_str']}")
-                
-                if preview.get('view_count'):
-                    view_count = preview['view_count']
-                    if view_count >= 1_000_000:
-                        view_str = f"{view_count / 1_000_000:.1f}M views"
-                    elif view_count >= 1_000:
-                        view_str = f"{view_count / 1_000:.1f}K views"
-                    else:
-                        view_str = f"{view_count} views"
-                    st.caption(f"👁️ {view_str}")
-            
-            st.divider()
-        
+        with _sidebar_preview_placeholder.container():
+            with st.popover("Preview Video Details", use_container_width=True):
+                with st.spinner("Loading preview..."):
+                    preview = fetch_video_preview(url)
+                if preview:
+                    st.image(preview['thumbnail_url'], use_container_width=True)
+                    st.markdown(f"### {preview['title']}")
+                    st.caption(f"🎬 {preview['channel']} · ⏱️ {preview['duration_str']}")
+                    if preview.get('view_count'):
+                        view_count = preview['view_count']
+                        if view_count >= 1_000_000:
+                            view_str = f"{view_count / 1_000_000:.1f}M views"
+                        elif view_count >= 1_000:
+                            view_str = f"{view_count / 1_000:.1f}K views"
+                        else:
+                            view_str = f"{view_count} views"
+                        st.caption(f"👁️ {view_str}")
+
     def render_download_buttons(folder_path):
         """Helper to render download buttons inside the status container."""
         st.markdown("---")
@@ -459,6 +458,187 @@ def main():
                 )
             else:
                  st.button("📄 Text", disabled=True, key=f"dl_txt_dis_{folder_path.name}")
+
+    def render_website_view(blocks, folder, hero_thumbnail=None):
+        """Render notes as a NeverTooSmall-style editorial HTML page via st.html()."""
+
+        def image_to_base64(img_path):
+            """Convert an image file to a base64 data URI."""
+            if not img_path or not Path(img_path).exists():
+                return None
+            ext = Path(img_path).suffix.lower()
+            mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp'}
+            mime = mime_map.get(ext, 'image/jpeg')
+            with open(img_path, 'rb') as f:
+                data = base64.b64encode(f.read()).decode('utf-8')
+            return f"data:{mime};base64,{data}"
+
+        html_parts = []
+
+        # HTML head with editorial CSS — based on NeverTooSmall layout
+        # System font stack mimics Inter on all platforms (SF Pro on Mac, Segoe UI on Windows, Roboto on Android)
+        html_parts.append("""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+
+* { box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    max-width: 1044px;
+    margin: 0 auto;
+    padding: 2rem;
+    color: #2B2B2B;
+    font-size: 16px;
+    line-height: 1.6;
+    background: #fff;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Text content is narrower than images, centered */
+.text-block {
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+h1 { font-size: 24px; font-weight: 600; line-height: 1.2em; margin-top: 2.5em; margin-bottom: 1em; }
+h2 { font-size: 24px; font-weight: 450; line-height: 1.2em; margin-top: 2.5em; margin-bottom: 1em; }
+h3 { font-size: 14px; font-weight: 500; margin-top: 1.4em; margin-bottom: 0.4em; text-transform: uppercase; letter-spacing: 0.04em; }
+
+p { margin-top: 1.4em; margin-bottom: 0; }
+ul, ol { margin: 0.8em 0; padding-left: 1.5em; }
+li { margin: 0.4em 0; line-height: 1.6; }
+
+img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.hero-img {
+    margin-bottom: 72px;
+}
+
+.figure {
+    margin-top: 72px;
+    margin-bottom: 72px;
+}
+
+.caption {
+    font-size: 14px;
+    color: #888;
+    margin-top: 8px;
+    line-height: 1.4em;
+    text-align: left;
+}
+
+.img-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 72px;
+    margin-bottom: 72px;
+}
+
+.img-grid .caption {
+    margin-bottom: 0;
+}
+
+.img-single {
+    margin-top: 72px;
+    margin-bottom: 72px;
+}
+
+strong { font-weight: 600; }
+
+a { color: #2B2B2B; }
+</style>
+</head>
+<body>
+""")
+
+        # Hero thumbnail
+        if hero_thumbnail:
+            data_uri = image_to_base64(str(hero_thumbnail))
+            if data_uri:
+                html_parts.append(f'<img src="{data_uri}" class="hero-img" alt="Video thumbnail">\n')
+
+        # Process blocks with image buffering — pair images into 2-column grids
+        # even when text is interleaved between them. Flush at section boundaries.
+        image_buffer = []  # holds (data_uri, caption) waiting for a pair
+        text_buffer = []   # holds text HTML between buffered images
+
+        def wrap_text(html):
+            """Wrap text HTML in a narrow text-block div."""
+            return f'<div class="text-block">{html}</div>'
+
+        def flush_image_buffer():
+            """Render buffered images: 2 as grid, 1 as full-width."""
+            nonlocal image_buffer, text_buffer
+            if len(image_buffer) >= 2:
+                # Render pair as 2-column grid, then any held text after
+                html_parts.append('<div class="img-grid">')
+                for data_uri, caption in image_buffer[:2]:
+                    html_parts.append(f'<div><img src="{data_uri}" alt="{caption}"><div class="caption">{caption}</div></div>')
+                html_parts.append('</div>\n')
+                # Append any text that was between the two images
+                html_parts.extend(text_buffer)
+                image_buffer = image_buffer[2:]
+                text_buffer = []
+            elif len(image_buffer) == 1:
+                # Single leftover — render full-width
+                data_uri, caption = image_buffer[0]
+                html_parts.append(f'<div class="img-single"><img src="{data_uri}" alt="{caption}">')
+                html_parts.append(f'<div class="caption">{caption}</div></div>\n')
+                html_parts.extend(text_buffer)
+                image_buffer = []
+                text_buffer = []
+
+        for block in blocks:
+            if block["type"] == "text":
+                content_stripped = block["content"].strip()
+                # Check if this text starts a new section (heading)
+                is_heading = content_stripped.startswith('#')
+
+                if is_heading:
+                    # Flush any buffered images before the new section
+                    flush_image_buffer()
+                    text_html = markdown.markdown(block["content"], extensions=['tables', 'fenced_code'])
+                    html_parts.append(wrap_text(text_html))
+                elif image_buffer:
+                    # We have a buffered image — hold this text until we get a pair or a flush
+                    text_html = markdown.markdown(block["content"], extensions=['tables', 'fenced_code'])
+                    text_buffer.append(wrap_text(text_html))
+                else:
+                    text_html = markdown.markdown(block["content"], extensions=['tables', 'fenced_code'])
+                    html_parts.append(wrap_text(text_html))
+
+            elif block["type"] == "image":
+                data_uri = image_to_base64(str(block["path"]))
+                if data_uri:
+                    image_buffer.append((data_uri, block["caption"]))
+                    # If we have a pair, flush immediately
+                    if len(image_buffer) >= 2:
+                        flush_image_buffer()
+
+        # Flush any remaining buffered images at the end
+        flush_image_buffer()
+
+        html_parts.append('</body></html>')
+
+        html_string = '\n'.join(html_parts)
+
+        # Calculate approximate height based on content
+        num_images = sum(1 for b in blocks if b["type"] == "image")
+        num_text = sum(1 for b in blocks if b["type"] == "text")
+        estimated_height = max(800, num_images * 600 + num_text * 100)
+
+        st.html(f'<div style="height:{estimated_height}px">{html_string}</div>')
+
+        return html_string
 
     # Determine which processing mode to use
     is_youtube_process = process_btn and url
@@ -590,7 +770,7 @@ def main():
 
             
             st.divider()
-            
+
             # Display Video Thumbnail (Hero Image)
             thumbnail_files = list(folder.glob("*.jpg")) + list(folder.glob("*.webp"))
             # Filter out screenshots (which usually have timestamps in names or are in a subfolder, 
@@ -615,7 +795,7 @@ def main():
                         hero_thumbnail = img
                         break
             
-            if hero_thumbnail:
+            if hero_thumbnail and not website_view:
                 st.image(str(hero_thumbnail), width='stretch')
 
             # Read and display markdown with images
@@ -652,67 +832,122 @@ def main():
             if current_text_block:
                 blocks.append({"type": "text", "content": '\n'.join(current_text_block)})
             
-            # Render blocks with Mosaic Layout
-            i = 0
-            while i < len(blocks):
-                block = blocks[i]
-                
-                if block["type"] == "text":
-                    st.markdown(block["content"])
-                    i += 1
-                elif block["type"] == "image":
-                    # Collect consecutive images
-                    image_group = [block]
-                    j = i + 1
-                    while j < len(blocks):
-                        next_block = blocks[j]
-                        if next_block["type"] == "image":
-                            image_group.append(next_block)
-                            j += 1
-                        elif next_block["type"] == "text" and not next_block["content"].strip():
-                            # Skip empty text blocks
-                            j += 1
-                        else:
-                            break
-                    
-                    # Render the group
-                    count = len(image_group)
-                    
-                    if count == 1:
-                        # Single image -> Full width
-                        img = image_group[0]
-                        if img["path"].exists():
-                            st.image(str(img["path"]), caption=img["caption"])
-                            
-                    elif count == 2:
-                        # Two images -> Side by side (50/50)
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            if image_group[0]["path"].exists():
-                                st.image(str(image_group[0]["path"]), caption=image_group[0]["caption"])
-                        with c2:
-                            if image_group[1]["path"].exists():
-                                st.image(str(image_group[1]["path"]), caption=image_group[1]["caption"])
-                                
-                    else:
-                        # 3+ images -> Mosaic (First is Hero, rest are Grid)
-                        # Hero
-                        if image_group[0]["path"].exists():
-                            st.image(str(image_group[0]["path"]), caption=image_group[0]["caption"], width='stretch')
-                        
-                        # Grid for the rest
-                        remaining = image_group[1:]
-                        # Create rows of 2
-                        for k in range(0, len(remaining), 2):
-                            batch = remaining[k:k+2]
-                            cols = st.columns(len(batch))
-                            for idx, col in enumerate(cols):
-                                with col:
-                                    if batch[idx]["path"].exists():
-                                        st.image(str(batch[idx]["path"]), caption=batch[idx]["caption"])
+            website_html = None
+            if website_view:
+                website_html = render_website_view(blocks, folder, hero_thumbnail)
+            else:
+                # Render blocks with Mosaic Layout
+                i = 0
+                while i < len(blocks):
+                    block = blocks[i]
 
-                    # Advance index
-                    i = j
+                    if block["type"] == "text":
+                        st.markdown(block["content"])
+                        i += 1
+                    elif block["type"] == "image":
+                        # Collect consecutive images
+                        image_group = [block]
+                        j = i + 1
+                        while j < len(blocks):
+                            next_block = blocks[j]
+                            if next_block["type"] == "image":
+                                image_group.append(next_block)
+                                j += 1
+                            elif next_block["type"] == "text" and not next_block["content"].strip():
+                                # Skip empty text blocks
+                                j += 1
+                            else:
+                                break
+
+                        # Render the group
+                        count = len(image_group)
+
+                        if count == 1:
+                            # Single image -> Full width
+                            img = image_group[0]
+                            if img["path"].exists():
+                                st.image(str(img["path"]), caption=img["caption"])
+
+                        elif count == 2:
+                            # Two images -> Side by side (50/50)
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if image_group[0]["path"].exists():
+                                    st.image(str(image_group[0]["path"]), caption=image_group[0]["caption"])
+                            with c2:
+                                if image_group[1]["path"].exists():
+                                    st.image(str(image_group[1]["path"]), caption=image_group[1]["caption"])
+
+                        else:
+                            # 3+ images -> Mosaic (First is Hero, rest are Grid)
+                            # Hero
+                            if image_group[0]["path"].exists():
+                                st.image(str(image_group[0]["path"]), caption=image_group[0]["caption"], width='stretch')
+
+                            # Grid for the rest
+                            remaining = image_group[1:]
+                            # Create rows of 2
+                            for k in range(0, len(remaining), 2):
+                                batch = remaining[k:k+2]
+                                cols = st.columns(len(batch))
+                                for idx, col in enumerate(cols):
+                                    with col:
+                                        if batch[idx]["path"].exists():
+                                            st.image(str(batch[idx]["path"]), caption=batch[idx]["caption"])
+
+                        # Advance index
+                        i = j
+
+            # --- Download buttons in sidebar ---
+            st.sidebar.divider()
+            st.sidebar.caption("📥 **Downloads**")
+
+            # PDF — always regenerate to include thumbnail
+            pdf_path = folder / f"{folder.name}.pdf"
+            try:
+                pdf_exporter = PDFExporter()
+                pdf_exporter.convert_markdown_to_pdf(str(md_file), str(pdf_path))
+            except Exception:
+                pass
+
+            if pdf_path.exists():
+                with open(pdf_path, "rb") as f:
+                    st.sidebar.download_button("📄 PDF", data=f.read(), file_name=pdf_path.name, mime="application/pdf", key="notes_dl_pdf", use_container_width=True)
+            else:
+                st.sidebar.button("📄 PDF", disabled=True, key="notes_dl_pdf_dis", use_container_width=True)
+
+            # HTML
+            html_export_path = folder / f"{md_file.stem}.html"
+            if not html_export_path.exists():
+                try:
+                    exporter = Exporter(str(folder))
+                    html_export_path = Path(exporter.export_to_html(str(md_file)))
+                except Exception:
+                    pass
+            if html_export_path.exists():
+                with open(html_export_path, "r", encoding="utf-8") as f:
+                    st.sidebar.download_button("🌐 HTML", data=f.read(), file_name=html_export_path.name, mime="text/html", key="notes_dl_html", use_container_width=True)
+            else:
+                st.sidebar.button("🌐 HTML", disabled=True, key="notes_dl_html_dis", use_container_width=True)
+
+            # Website View HTML export
+            if website_html:
+                st.sidebar.download_button("🖼️ Website HTML", data=website_html, file_name=f"{folder.name}_website.html", mime="text/html", key="notes_dl_website", use_container_width=True)
+            else:
+                st.sidebar.button("🖼️ Website HTML", disabled=True, key="notes_dl_website_dis", help="Enable Website View to export", use_container_width=True)
+
+            # Text
+            txt_path = folder / f"{md_file.stem}.txt"
+            if not txt_path.exists():
+                with open(md_file, "r", encoding="utf-8") as f:
+                    content_txt = f.read()
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(content_txt)
+            if txt_path.exists():
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    st.sidebar.download_button("📄 Text", data=f.read(), file_name=txt_path.name, mime="text/plain", key="notes_dl_txt", use_container_width=True)
+            else:
+                st.sidebar.button("📄 Text", disabled=True, key="notes_dl_txt_dis", use_container_width=True)
 
 if __name__ == "__main__":
     main()
